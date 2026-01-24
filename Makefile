@@ -5,7 +5,7 @@ generate:
 
 .PHONY: lint
 lint:
-	go run github.com/golangci/golangci-lint/cmd/golangci-lint run
+	go tool golangci-lint run
 
 .PHONY: test
 test: generate lint
