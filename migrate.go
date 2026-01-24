@@ -15,7 +15,7 @@ type migrateOptions struct {
 
 type MigrateOption func(*migrateOptions)
 
-func Migrate(ctx context.Context, source Source, target Target, opts ...MigrateOption) (ExecutionResponse, error) {
+func Migrate(ctx context.Context, source Source, target Target, opts ...MigrateOption) (executionResponse ExecutionResponse, errResponse error) {
 	options := migrateOptions{
 		Runner:        nil,
 		Reporter:      nil,
@@ -38,7 +38,10 @@ func Migrate(ctx context.Context, source Source, target Target, opts ...MigrateO
 		return ExecutionResponse{}, err
 	}
 	defer func() {
-		_ = unlocker.Unlock(detach(ctx))
+		err := unlocker.Unlock(detach(ctx))
+		if errResponse == nil { // If the originalReturned error isn't set, set it to the `Unlock` error, in case it fails.
+			errResponse = err
+		}
 	}()
 
 	err = runner.target.Create(ctx)
@@ -51,6 +54,7 @@ func Migrate(ctx context.Context, source Source, target Target, opts ...MigrateO
 	if err != nil {
 		return ExecutionResponse{}, err
 	}
+
 	return runner.Execute(ctx, &ExecuteRequest{
 		Plan: plan,
 	})

@@ -18,6 +18,12 @@ func WithDatabaseName(name string) Option {
 	}
 }
 
+func WithTableName(name string) Option {
+	return func(opts *driverOpts) {
+		opts.TableName = name
+	}
+}
+
 func WithContext(ctx context.Context) Option {
 	return func(opts *driverOpts) {
 		opts.Ctx = ctx

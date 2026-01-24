@@ -48,7 +48,10 @@ func NewTarget(db DB, options ...TargetOption) (*Target, error) {
 	}
 
 	if opts.driver == nil {
-		d, err := drivers.DriverFromDB(db, opts.driverOptions...)
+		driverOptions := append([]drivers.Option{
+			drivers.WithTableName(opts.tableName),
+		}, opts.driverOptions...)
+		d, err := drivers.DriverFromDB(db, driverOptions...)
 		if err != nil {
 			return nil, err
 		}
