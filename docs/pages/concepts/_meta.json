@@ -3,5 +3,6 @@
   "target": "Target",
   "planners": "Planners",
   "reporters": "Reporters",
+  "stale-migrations": "Stale Migrations",
   "errors": "Error Handling"
 }

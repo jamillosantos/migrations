@@ -156,8 +156,16 @@ Undo files are optional. Migrations without an undo file are forward-only.
 
 ## Generating Migration Files
 
+Add the CLI as a tool dependency:
+
 ```bash
-go run github.com/jamillosantos/migrations/v2/cli/migrations create -destination=migrations
+go get -tool github.com/jamillosantos/migrations/v2/cli/migrations
+```
+
+Then generate migration files:
+
+```bash
+go tool migrations create -destination=migrations
 ```
 
 ## Planners

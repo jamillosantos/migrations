@@ -8,6 +8,12 @@ const config: DocsThemeConfig = {
   },
   docsRepositoryBase:
     "https://github.com/jamillosantos/migrations/tree/main/docs",
+  feedback: {
+    content: null,
+  },
+  editLink: {
+    text: null,
+  },
   footer: {
     text: "migrations - A flexible, driver-agnostic migration library for Go.",
   },

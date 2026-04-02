@@ -5,9 +5,11 @@ const withNextra = nextra({
   themeConfig: "./theme.config.tsx",
 });
 
+const isProd = process.env.NODE_ENV === "production";
+
 export default withNextra({
   output: "export",
-  basePath: "/migrations",
+  basePath: isProd ? "/migrations" : "",
   images: {
     unoptimized: true,
   },
