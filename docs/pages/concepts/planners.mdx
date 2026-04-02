@@ -1,0 +1,117 @@
+# Planners
+
+A **Planner** decides which migrations to run and in which direction. It compares the available migrations (from the Source) with the applied migrations (from the Target) and produces a **Plan** — an ordered list of actions.
+
+## Interface
+
+```go
+type Planner interface {
+    Plan(ctx context.Context) (Plan, error)
+}
+
+type Plan []*Action
+
+type Action struct {
+    Action    ActionType  // "do" or "undo"
+    Migration Migration
+}
+```
+
+## Built-in Planners
+
+### MigratePlanner (default)
+
+Runs all pending migrations from the current state to the latest.
+
+```go
+migrations.Migrate(ctx, source, target)
+// or explicitly:
+migrations.Migrate(ctx, source, target,
+    migrations.WithPlanner(migrations.MigratePlanner),
+)
+```
+
+If all migrations are already applied, returns an empty plan (no-op).
+
+### ResetPlanner
+
+Undoes all applied migrations in reverse order, then applies all migrations from scratch.
+
+```go
+migrations.Migrate(ctx, source, target,
+    migrations.WithPlanner(migrations.ResetPlanner),
+)
+```
+
+Useful for resetting a development or test database to a known state.
+
+### RewindPlanner
+
+Undoes all applied migrations in reverse order. Does not re-apply anything.
+
+```go
+migrations.Migrate(ctx, source, target,
+    migrations.WithPlanner(migrations.RewindPlanner),
+)
+```
+
+### StepPlanner
+
+Steps forward or backward by N migrations.
+
+```go
+// Apply the next 3 pending migrations
+migrations.Migrate(ctx, source, target,
+    migrations.WithPlanner(migrations.StepPlanner(3)),
+)
+
+// Undo the last 2 applied migrations
+migrations.Migrate(ctx, source, target,
+    migrations.WithPlanner(migrations.StepPlanner(-2)),
+)
+```
+
+Returns `ErrStepOutOfIndex` if the step goes beyond the available range.
+
+### DoPlanner
+
+Applies the next single pending migration. Equivalent to `StepPlanner(1)`.
+
+```go
+migrations.Migrate(ctx, source, target,
+    migrations.WithPlanner(migrations.DoPlanner),
+)
+```
+
+### UndoPlanner
+
+Undoes the last applied migration. Equivalent to `StepPlanner(-1)`.
+
+```go
+migrations.Migrate(ctx, source, target,
+    migrations.WithPlanner(migrations.UndoPlanner),
+)
+```
+
+Returns `ErrMigrationNotUndoable` if the migration doesn't support undo.
+
+## Summary
+
+| Planner | Direction | Behavior |
+|---|---|---|
+| `MigratePlanner` | Forward | Run all pending migrations |
+| `ResetPlanner` | Both | Undo everything, then migrate to latest |
+| `RewindPlanner` | Backward | Undo all applied migrations |
+| `StepPlanner(n)` | Either | Step forward (n > 0) or backward (n < 0) by N |
+| `DoPlanner` | Forward | Run the next pending migration |
+| `UndoPlanner` | Backward | Undo the last applied migration |
+
+## Custom Planners
+
+A planner is any function matching the `ActionPLanner` signature:
+
+```go
+type ActionPLanner func(source Source, target Target) Planner
+```
+
+You can implement custom planners to target a specific migration version, skip certain migrations, or implement any other strategy.

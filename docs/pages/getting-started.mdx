@@ -1,0 +1,116 @@
+# Getting Started
+
+This guide walks you through setting up migrations from scratch using SQL files with PostgreSQL.
+
+## Installation
+
+```bash
+go get github.com/jamillosantos/migrations/v2
+```
+
+Pick the driver package for your database:
+
+| Database | Package | Install |
+|---|---|---|
+| PostgreSQL (database/sql) | `github.com/jamillosantos/migrations/v2/sql` | Included in core |
+| PostgreSQL (pgx) | `github.com/jamillosantos/migrations/v2/pgx` | Included in core |
+| MongoDB | `github.com/jamillosantos/migrations-mongo/v2` | `go get github.com/jamillosantos/migrations-mongo/v2` |
+| DynamoDB | `github.com/jamillosantos/migrations-dynamodb` | `go get github.com/jamillosantos/migrations-dynamodb` |
+
+## Create Your First Migration
+
+Use the CLI to generate a migration file:
+
+```bash
+go run github.com/jamillosantos/migrations/v2/cli/migrations create -d migrations "create users table"
+```
+
+This creates a file like `migrations/20250401120000_create_users_table.do.sql`. Open it and add your SQL:
+
+```sql
+CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+To also generate an undo file, pass the `--undo` flag:
+
+```bash
+go run github.com/jamillosantos/migrations/v2/cli/migrations create -d migrations --undo "create users table"
+```
+
+This creates both `.do.sql` and `.undo.sql` files. Add the reverse operation to the undo file:
+
+```sql
+DROP TABLE users;
+```
+
+## Embed and Run
+
+Use Go's `embed` package to bundle migrations into your binary, then run them at startup:
+
+```go
+package main
+
+import (
+	"context"
+	"database/sql"
+	"embed"
+	"log"
+
+	_ "github.com/lib/pq"
+
+	"github.com/jamillosantos/migrations/v2"
+	migrationsql "github.com/jamillosantos/migrations/v2/sql"
+)
+
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
+
+func main() {
+	db, err := sql.Open("postgres", "postgres://localhost:5432/mydb?sslmode=disable")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	source, err := migrationsql.SourceFromFS(func() migrationsql.DBExecer {
+		return db
+	}, migrationsFS, "migrations")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	target, err := migrationsql.NewTarget(db)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	_, err = migrations.Migrate(context.Background(), source, target)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Println("migrations applied successfully")
+}
+```
+
+## What Happens Under the Hood
+
+When you call `migrations.Migrate`, the library:
+
+1. **Locks** the target to prevent concurrent migration runs
+2. **Creates** the migrations tracking table (`_migrations`) if it doesn't exist
+3. **Plans** which migrations to run by comparing available migrations (Source) with applied migrations (Target)
+4. **Executes** each pending migration in order
+5. **Unlocks** the target when done
+
+If a migration fails mid-execution, it's marked as **dirty** in the target. The next run will detect the dirty state and return `ErrDirtyMigration` so you can investigate and fix the issue manually.
+
+## Next Steps
+
+- Learn about the core [Concepts](/migrations/concepts) — Source, Target, Planners, and Reporters
+- See all available [Drivers](/migrations/drivers) for different databases
+- Explore the [CLI](/migrations/cli) for generating migration files

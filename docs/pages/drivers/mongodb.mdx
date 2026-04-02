@@ -1,0 +1,157 @@
+# MongoDB
+
+The [migrations-mongo](https://github.com/jamillosantos/migrations-mongo) package provides a MongoDB Target implementation using the official [Go MongoDB driver](https://pkg.go.dev/go.mongodb.org/mongo-driver/v2).
+
+This package provides only a **Target** (state tracking). For the migration source, use any Source from the core library — typically `NewMemorySource()` with Go function migrations, since MongoDB operations are written in Go code rather than SQL files.
+
+## Install
+
+```bash
+go get github.com/jamillosantos/migrations-mongo/v2
+```
+
+## Target
+
+```go
+import migrationsmongo "github.com/jamillosantos/migrations-mongo/v2"
+
+target, err := migrationsmongo.NewTarget(db)
+```
+
+Where `db` is a `*mongo.Database` from the MongoDB driver.
+
+### Options
+
+```go
+target, err := migrationsmongo.NewTarget(db,
+    migrationsmongo.CollectionName("my_migrations"),        // default: "_migrations"
+    migrationsmongo.LockTimeout(30 * time.Second),          // default: 10s
+    migrationsmongo.OperationTimeout(15 * time.Second),     // default: 10s
+)
+```
+
+| Option | Description | Default |
+|---|---|---|
+| `CollectionName(name)` | Collection for tracking applied migrations | `"_migrations"` |
+| `LockTimeout(d)` | How long to wait acquiring the distributed lock | `10s` |
+| `OperationTimeout(d)` | Timeout for individual database operations | `10s` |
+
+## Locking
+
+MongoDB doesn't have advisory locks, so the library implements distributed locking using a separate collection (`<collection_name>_lock`). Lock acquisition uses UUID-based identifiers and a retry loop with the configured timeout.
+
+If the lock can't be acquired within the timeout, `ErrLockTimeout` is returned.
+
+## Full Example
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+	"time"
+
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
+
+	"github.com/jamillosantos/migrations/v2"
+	"github.com/jamillosantos/migrations/v2/fnc"
+	migrationsmongo "github.com/jamillosantos/migrations-mongo/v2"
+)
+
+func main() {
+	ctx := context.Background()
+
+	client, err := mongo.Connect(options.Client().ApplyURI("mongodb://localhost:27017"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer client.Disconnect(ctx)
+
+	db := client.Database("myapp")
+
+	// Create source with Go function migrations
+	source := migrations.NewMemorySource()
+
+	// Register migrations — the fnc package extracts the ID from the filename
+	// File: 20250401120000_create_users_collection.go
+	source.Add(ctx, fnc.Migration(func(ctx context.Context) error {
+		return db.CreateCollection(ctx, "users")
+	}))
+
+	// Create MongoDB target
+	target, err := migrationsmongo.NewTarget(db,
+		migrationsmongo.LockTimeout(30 * time.Second),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	_, err = migrations.Migrate(ctx, source, target)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+## Migration Pattern
+
+Since MongoDB migrations are Go functions, a common pattern is to create a migrations package with a helper:
+
+```go
+// migrations/migrations.go
+package mymigrations
+
+import (
+	"context"
+
+	"github.com/jamillosantos/migrations/v2"
+	"github.com/jamillosantos/migrations/v2/fnc"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+)
+
+var (
+	Migrations []migrations.Migration
+	DB         *mongo.Database
+)
+
+func migration(do func(ctx context.Context) error) {
+	Migrations = append(Migrations, fnc.Migration(do, fnc.WithSkip(2)))
+}
+```
+
+```go
+// migrations/20250401120000_create_users.go
+package mymigrations
+
+import (
+	"context"
+
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
+)
+
+var _ = migration(func(ctx context.Context) error {
+	if err := DB.CreateCollection(ctx, "users"); err != nil {
+		return err
+	}
+
+	_, err := DB.Collection("users").Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "email", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	})
+	return err
+})
+```
+
+Then in your main:
+
+```go
+mymigrations.DB = db
+source := migrations.NewMemorySource()
+for _, m := range mymigrations.Migrations {
+    source.Add(ctx, m)
+}
+```

@@ -1,0 +1,141 @@
+# PostgreSQL (database/sql)
+
+The `sql` package provides Source and Target implementations using Go's standard `database/sql` interface. It works with any SQL database that has a registered driver, with built-in support for PostgreSQL.
+
+## Install
+
+This package is included in the core module:
+
+```bash
+go get github.com/jamillosantos/migrations/v2
+```
+
+You also need a database driver:
+
+```bash
+go get github.com/lib/pq          # PostgreSQL
+```
+
+## Source
+
+### From embedded files
+
+```go
+import migrationsql "github.com/jamillosantos/migrations/v2/sql"
+
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
+
+source, err := migrationsql.SourceFromFS(func() migrationsql.DBExecer {
+    return db
+}, migrationsFS, "migrations")
+```
+
+The `DBExecer` interface requires only one method:
+
+```go
+type DBExecer interface {
+    ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+}
+```
+
+Both `*sql.DB` and `*sql.Tx` satisfy this interface, so you can run migrations inside a transaction by returning a `*sql.Tx` from the getter.
+
+### From a directory
+
+```go
+source, err := migrationsql.SourceFromDirectory(func() migrationsql.DBExecer {
+    return db
+}, "./migrations")
+```
+
+## Target
+
+```go
+target, err := migrationsql.NewTarget(db)
+```
+
+The target requires the `DB` interface:
+
+```go
+type DB interface {
+    DBExecer
+    Driver() driver.Driver
+    BeginTx(ctx context.Context, tx *sql.TxOptions) (*sql.Tx, error)
+    QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
+}
+```
+
+`*sql.DB` satisfies this interface.
+
+### Options
+
+```go
+target, err := migrationsql.NewTarget(db,
+    migrationsql.WithTableName("my_migrations"),  // default: "_migrations"
+)
+```
+
+| Option | Description | Default |
+|---|---|---|
+| `WithTableName(name)` | Name of the migrations tracking table | `"_migrations"` |
+| `WithDriver(driver)` | Override the auto-detected database driver | Auto-detected |
+| `WithDriverOptions(opts...)` | Pass options to the database driver | None |
+
+## Locking
+
+The PostgreSQL driver uses `pg_advisory_lock` to prevent concurrent migrations. The lock ID is derived from the table name using a murmur3 hash. The lock is automatically acquired and released by `Migrate()`.
+
+For non-PostgreSQL databases using the generic SQL driver, locking is a no-op.
+
+## Full Example
+
+```go
+package main
+
+import (
+	"context"
+	"database/sql"
+	"embed"
+	"log"
+
+	_ "github.com/lib/pq"
+	"go.uber.org/zap"
+
+	"github.com/jamillosantos/migrations/v2"
+	"github.com/jamillosantos/migrations/v2/reporters"
+	migrationsql "github.com/jamillosantos/migrations/v2/sql"
+)
+
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
+
+func main() {
+	logger, _ := zap.NewDevelopmentConfig().Build()
+	db, err := sql.Open("postgres", "postgres://localhost:5432/mydb?sslmode=disable")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	source, err := migrationsql.SourceFromFS(func() migrationsql.DBExecer {
+		return db
+	}, migrationsFS, "migrations")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	target, err := migrationsql.NewTarget(db)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	_, err = migrations.Migrate(context.Background(), source, target,
+		migrations.WithRunnerOptions(
+			migrations.WithReporter(reporters.NewZapReporter(logger)),
+		),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+```

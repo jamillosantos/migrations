@@ -1,0 +1,70 @@
+# Target
+
+A **Target** is what the migrations are transforming. It tracks which migrations have been applied, what the current state is, and provides locking to prevent concurrent runs.
+
+## Interface
+
+```go
+type Target interface {
+    Current(ctx context.Context) (string, error)
+    Create(ctx context.Context) error
+    Destroy(ctx context.Context) error
+    Done(ctx context.Context) ([]string, error)
+    Add(ctx context.Context, id string) error
+    Remove(ctx context.Context, id string) error
+    FinishMigration(ctx context.Context, id string) error
+    StartMigration(ctx context.Context, id string) error
+    Lock(ctx context.Context) (Unlocker, error)
+}
+```
+
+| Method | Purpose |
+|---|---|
+| `Current` | Returns the ID of the most recently applied migration. Returns `ErrNoCurrentMigration` if none applied. |
+| `Create` | Creates the tracking storage (e.g., `_migrations` table). Safe to call multiple times. |
+| `Destroy` | Removes the tracking storage entirely. |
+| `Done` | Returns all applied migration IDs. |
+| `Add` | Records a migration as applied. |
+| `Remove` | Removes a migration from the applied list. |
+| `StartMigration` | Marks a migration as in-progress (dirty). |
+| `FinishMigration` | Marks a migration as complete (clears dirty flag). |
+| `Lock` | Acquires an exclusive lock. Returns an `Unlocker` to release it. |
+
+## Dirty State
+
+When a migration starts executing, `StartMigration` marks it as **dirty**. Once it completes successfully, `FinishMigration` clears the flag. If the process crashes mid-migration, the dirty flag remains set.
+
+On the next run, `Done` detects the dirty migration and returns `ErrDirtyMigration`. This requires manual intervention — you need to either complete the migration manually or clean up the dirty state before retrying.
+
+## Locking
+
+The `Lock` method prevents multiple processes from running migrations concurrently. The implementation varies by driver:
+
+| Driver | Locking Mechanism |
+|---|---|
+| PostgreSQL (sql) | `pg_advisory_lock` |
+| PostgreSQL (pgx) | `pg_advisory_lock` |
+| MongoDB | Document-based lock in `_migrations_lock` collection |
+| DynamoDB | Conditional put in `_migrations-lock` table |
+| Generic SQL | No-op (no locking) |
+
+Lock is acquired at the start of `Migrate()` and released when it returns, even on error.
+
+## Built-in Targets
+
+See the [Drivers](/migrations/drivers) section for available Target implementations:
+- [PostgreSQL (database/sql)](/migrations/drivers/sql)
+- [PostgreSQL (pgx)](/migrations/drivers/pgx)
+- [MongoDB](/migrations/drivers/mongodb)
+- [DynamoDB](/migrations/drivers/dynamodb)
+
+## Custom Targets
+
+You can implement `Target` for any storage backend. The contract is straightforward:
+
+1. `Create` should be idempotent — safe to call on every run.
+2. `Done` must return IDs sorted in the same order as the source.
+3. `StartMigration`/`FinishMigration` must track dirty state.
+4. `Lock` should block or fail if another process holds the lock.
+
+A JSON file, Redis key, or even an in-memory map can serve as a target — as long as it correctly tracks applied migrations and their dirty state.

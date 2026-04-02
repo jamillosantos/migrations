@@ -1,0 +1,147 @@
+# Extending
+
+The library is designed around interfaces. You can implement custom Sources, Targets, or Planners to support any storage backend or migration strategy.
+
+## Custom Source
+
+A Source loads available migrations. Implement the `Source` interface to load migrations from any media:
+
+```go
+type Source interface {
+    Add(ctx context.Context, migration Migration) error
+    Load(ctx context.Context) (Repository, error)
+}
+```
+
+For example, you could load migrations from an S3 bucket, a Git repository, or a configuration service.
+
+The `Repository` type manages the migration list. Use it in your `Load` implementation:
+
+```go
+func (s *mySource) Load(ctx context.Context) (migrations.Repository, error) {
+    var repo migrations.Repository
+
+    // Load your migrations from wherever they are stored
+    for _, m := range loadedMigrations {
+        if err := repo.Add(m); err != nil {
+            return migrations.Repository{}, err
+        }
+    }
+
+    return repo, nil
+}
+```
+
+## Custom Target
+
+A Target tracks applied migrations. Implement the `Target` interface to store state in any backend:
+
+```go
+type Target interface {
+    Current(ctx context.Context) (string, error)
+    Create(ctx context.Context) error
+    Destroy(ctx context.Context) error
+    Done(ctx context.Context) ([]string, error)
+    Add(ctx context.Context, id string) error
+    Remove(ctx context.Context, id string) error
+    FinishMigration(ctx context.Context, id string) error
+    StartMigration(ctx context.Context, id string) error
+    Lock(ctx context.Context) (Unlocker, error)
+}
+```
+
+Key requirements:
+- `Create` must be idempotent.
+- `Done` must return `ErrDirtyMigration` if any migration is in a dirty state.
+- `StartMigration` sets the dirty flag; `FinishMigration` clears it.
+- `Lock` must prevent concurrent execution. If your backend doesn't support locking, return a no-op `Unlocker`.
+
+### No-op Locker
+
+If your target doesn't need distributed locking:
+
+```go
+type noopUnlocker struct{}
+
+func (noopUnlocker) Unlock(ctx context.Context) error { return nil }
+
+func (t *myTarget) Lock(ctx context.Context) (migrations.Unlocker, error) {
+    return noopUnlocker{}, nil
+}
+```
+
+## Custom Migration
+
+Implement the `Migration` interface for full control over what a migration does:
+
+```go
+type Migration interface {
+    ID() string
+    String() string
+    Description() string
+    Next() Migration
+    SetNext(Migration) Migration
+    Previous() Migration
+    SetPrevious(Migration) Migration
+    Do(ctx context.Context) error
+    CanUndo() bool
+    Undo(ctx context.Context) error
+}
+```
+
+Or use the built-in `BaseMigration` for simple cases:
+
+```go
+m := migrations.NewMigration(
+    "20250401120000",
+    "create users table",
+    func(ctx context.Context) error { /* do */ return nil },
+    func(ctx context.Context) error { /* undo */ return nil }, // nil for forward-only
+)
+```
+
+## Custom Planner
+
+A Planner decides which migrations to run. Implement the `ActionPLanner` function signature:
+
+```go
+type ActionPLanner func(source Source, target Target) Planner
+
+type Planner interface {
+    Plan(ctx context.Context) (Plan, error)
+}
+```
+
+Example — a planner that migrates to a specific version:
+
+```go
+func MigrateToPlanner(targetID string) migrations.ActionPLanner {
+    return func(source migrations.Source, target migrations.Target) migrations.Planner {
+        return &migrateToPlanner{
+            source:   source,
+            target:   target,
+            targetID: targetID,
+        }
+    }
+}
+
+type migrateToPlanner struct {
+    source   migrations.Source
+    target   migrations.Target
+    targetID string
+}
+
+func (p *migrateToPlanner) Plan(ctx context.Context) (migrations.Plan, error) {
+    // Load available and applied migrations
+    // Build a plan that gets from current state to targetID
+    // Return actions (Do for forward, Undo for backward)
+}
+```
+
+Use it with:
+
+```go
+migrations.Migrate(ctx, source, target,
+    migrations.WithPlanner(MigrateToPlanner("20250315143000")),
+)
+```

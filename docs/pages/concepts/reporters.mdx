@@ -1,0 +1,91 @@
+# Reporters
+
+A **Reporter** receives callbacks before and after migration execution, letting you log progress, emit metrics, or display status to users.
+
+## Interface
+
+```go
+type RunnerReporter interface {
+    BeforeExecute(ctx context.Context, info *BeforeExecuteInfo)
+    BeforeExecuteMigration(ctx context.Context, info *BeforeExecuteMigrationInfo)
+    AfterExecuteMigration(ctx context.Context, info *AfterExecuteMigrationInfo)
+    AfterExecute(ctx context.Context, info *AfterExecuteInfo)
+}
+```
+
+### Callback Info
+
+| Callback | Info fields |
+|---|---|
+| `BeforeExecute` | `Plan` — the full list of actions about to run |
+| `BeforeExecuteMigration` | `ActionType` (do/undo), `Migration` |
+| `AfterExecuteMigration` | `ActionType`, `Migration`, `Err` (nil on success) |
+| `AfterExecute` | `Plan`, `Stats` (ExecutionResponse), `Err` |
+
+## Usage
+
+Pass a reporter through `WithRunnerOptions`:
+
+```go
+migrations.Migrate(ctx, source, target,
+    migrations.WithRunnerOptions(
+        migrations.WithReporter(reporter),
+    ),
+)
+```
+
+Or when creating a runner directly:
+
+```go
+runner := migrations.NewRunner(source, target,
+    migrations.WithReporter(reporter),
+)
+```
+
+## Built-in Reporters
+
+### ZapReporter
+
+Logs migration progress using [Zap](https://github.com/uber-go/zap):
+
+```go
+import "github.com/jamillosantos/migrations/v2/reporters"
+
+reporter := reporters.NewZapReporter(logger)
+```
+
+Output includes the full plan before execution, each migration as it runs, and a summary with any errors.
+
+### NoopReporter
+
+Does nothing. Useful for tests or when you don't need logging:
+
+```go
+reporter := reporters.NewNoOP()
+```
+
+## Custom Reporters
+
+Implement the `RunnerReporter` interface to build your own:
+
+```go
+type metricsReporter struct {
+    // your metrics client
+}
+
+func (r *metricsReporter) BeforeExecute(ctx context.Context, info *migrations.BeforeExecuteInfo) {
+    // record that migrations are starting
+}
+
+func (r *metricsReporter) BeforeExecuteMigration(ctx context.Context, info *migrations.BeforeExecuteMigrationInfo) {
+    // start a timer for this migration
+}
+
+func (r *metricsReporter) AfterExecuteMigration(ctx context.Context, info *migrations.AfterExecuteMigrationInfo) {
+    // record duration, success/failure
+}
+
+func (r *metricsReporter) AfterExecute(ctx context.Context, info *migrations.AfterExecuteInfo) {
+    // record total count, overall result
+}
+```

@@ -1,0 +1,6 @@
+{
+  "sql": "PostgreSQL (database/sql)",
+  "pgx": "PostgreSQL (pgx)",
+  "mongodb": "MongoDB",
+  "dynamodb": "DynamoDB"
+}

@@ -20,3 +20,5 @@
 
 .docusaurus/
 node_modules/
+docs/.next/
+docs/out/

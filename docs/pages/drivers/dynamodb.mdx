@@ -1,0 +1,108 @@
+# DynamoDB
+
+The [migrations-dynamodb](https://github.com/jamillosantos/migrations-dynamodb) package provides a DynamoDB Target implementation using the [AWS SDK for Go v2](https://github.com/aws/aws-sdk-go-v2).
+
+Like the MongoDB driver, this package provides only a **Target**. Use Go function migrations with `NewMemorySource()` as the Source.
+
+## Install
+
+```bash
+go get github.com/jamillosantos/migrations-dynamodb
+```
+
+## Target
+
+```go
+import migrationsdynamo "github.com/jamillosantos/migrations-dynamodb"
+
+target := migrationsdynamo.NewTarget(dynamoClient)
+```
+
+Where `dynamoClient` is a `*dynamodb.Client` from the AWS SDK v2.
+
+### Options
+
+```go
+target := migrationsdynamo.NewTarget(dynamoClient,
+    migrationsdynamo.WithTableName("my_migrations"),        // default: "_migrations"
+    migrationsdynamo.WithLockTableName("my_migrations_lock"), // default: "_migrations-lock"
+    migrationsdynamo.WithLockID("my-service"),               // default: "migrations"
+)
+```
+
+| Option | Description | Default |
+|---|---|---|
+| `WithTableName(name)` | DynamoDB table for tracking applied migrations | `"_migrations"` |
+| `WithLockTableName(name)` | DynamoDB table for distributed locking | `"_migrations-lock"` |
+| `WithLockID(id)` | Identifier for the lock entry | `"migrations"` |
+
+## Table Structure
+
+The target manages two DynamoDB tables:
+
+**Migrations table** (`_migrations`):
+- Partition key: `ID` (string) — the migration ID
+- Attribute: `Dirty` (boolean) — whether the migration is in-progress
+
+**Lock table** (`_migrations-lock`):
+- Partition key: `ID` (string) — the lock identifier
+
+Both tables are created automatically by `Target.Create()` (called by `Migrate()`).
+
+## Locking
+
+Uses DynamoDB conditional writes to implement distributed locking. A lock entry is inserted into the lock table; if another process holds the lock, the conditional write fails and the migration returns an error.
+
+## Full Example
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+
+	"github.com/jamillosantos/migrations/v2"
+	"github.com/jamillosantos/migrations/v2/fnc"
+	migrationsdynamo "github.com/jamillosantos/migrations-dynamodb"
+)
+
+func main() {
+	ctx := context.Background()
+
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	client := dynamodb.NewFromConfig(cfg)
+
+	// Create source with Go function migrations
+	source := migrations.NewMemorySource()
+
+	source.Add(ctx, fnc.Migration(func(ctx context.Context) error {
+		// Create your application tables, indexes, etc.
+		_, err := client.CreateTable(ctx, &dynamodb.CreateTableInput{
+			// ...
+		})
+		return err
+	}))
+
+	// Create DynamoDB target
+	target := migrationsdynamo.NewTarget(client)
+
+	_, err = migrations.Migrate(ctx, source, target)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+## Notes
+
+- The `Create()` method is idempotent — it checks if the tables exist before creating them.
+- `Destroy()` deletes both the migrations and lock tables.
+- Like the MongoDB driver, DynamoDB migrations are typically Go functions since there's no SQL to run.

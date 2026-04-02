@@ -1,0 +1,74 @@
+# Error Handling
+
+The library uses sentinel errors and typed error wrappers to provide structured error information.
+
+## Sentinel Errors
+
+```go
+import "github.com/jamillosantos/migrations/v2"
+```
+
+| Error | When |
+|---|---|
+| `ErrMigrationNotFound` | A migration ID was referenced but doesn't exist in the source |
+| `ErrNoCurrentMigration` | `Target.Current()` called when no migrations have been applied |
+| `ErrCurrentMigrationNotFound` | The current migration in the target doesn't exist in the source |
+| `ErrCurrentMigrationMoreRecent` | The current migration is ahead of the target migration |
+| `ErrNoMigrationsAvailable` | `Source.Load()` found no migrations |
+| `ErrMigrationNotUndoable` | Attempted to undo a migration that doesn't support it |
+| `ErrStepOutOfIndex` | `StepPlanner` went beyond the available migration range |
+| `ErrMigrationNotListed` | A migration is not in the source list |
+| `ErrStaleMigrationDetected` | A stale migration was detected in the target |
+| `ErrInvalidAction` | An undefined action type was encountered |
+| `ErrDirtyMigration` | A migration was started but not completed — requires manual intervention |
+
+## Error Wrappers
+
+Errors are wrapped with contextual information using typed wrappers. Use `errors.As` to extract details.
+
+### MigrationIDError
+
+Wraps an error with the migration ID that caused it:
+
+```go
+var idErr migrations.MigrationIDError
+if errors.As(err, &idErr) {
+    fmt.Printf("migration %s failed\n", idErr.MigrationID())
+}
+```
+
+### MigrationError
+
+Wraps an error with the full Migration object:
+
+```go
+var migErr migrations.MigrationError
+if errors.As(err, &migErr) {
+    m := migErr.Migration()
+    fmt.Printf("migration %s (%s) failed\n", m.ID(), m.Description())
+}
+```
+
+### QueryError
+
+Wraps SQL execution errors with the query text that failed:
+
+```go
+var qErr migrations.QueryError
+if errors.As(err, &qErr) {
+    fmt.Printf("query failed: %s\n", qErr.Query())
+}
+```
+
+This is particularly useful for debugging SQL migration failures, since you can see exactly which statement caused the error.
+
+## Handling Dirty Migrations
+
+When `ErrDirtyMigration` is returned, it means a previous migration run was interrupted. The migration is marked as dirty in the target.
+
+To recover:
+
+1. **Check what happened** — look at the dirty migration ID and inspect whether it was partially applied
+2. **Fix manually** — either complete the migration by hand or revert its partial changes
+3. **Clear the dirty flag** — update the target storage to mark the migration as either completed or remove it
+4. **Re-run migrations** — the next `Migrate` call will pick up from the correct state

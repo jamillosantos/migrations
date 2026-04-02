@@ -1,0 +1,64 @@
+# CLI
+
+The migrations CLI helps you generate migration files with the correct naming convention.
+
+## Install
+
+```bash
+go install github.com/jamillosantos/migrations/v2/cli/migrations@latest
+```
+
+Or run it directly without installing:
+
+```bash
+go run github.com/jamillosantos/migrations/v2/cli/migrations <command>
+```
+
+## Commands
+
+### create
+
+Generate a new migration file.
+
+```bash
+migrations create [flags] [description]
+```
+
+**Flags:**
+
+| Flag | Short | Description | Default |
+|---|---|---|---|
+| `--destination` | `-d` | Output directory | `.` (current directory) |
+| `--extension` | `-e` | File extension | `sql` |
+| `--format` | `-f` | ID format (`20060102150405` or `unix`) | `20060102150405` |
+| `--undo` | | Also create an `.undo` file | `false` |
+| `--down` | | Also create a `.down` file | `false` |
+| `--interactive` | `-i` | Interactive mode (prompts for description) | `false` |
+
+**Examples:**
+
+```bash
+# Create a forward-only SQL migration
+migrations create -d migrations "create users table"
+# → migrations/20250401120000_create_users_table.do.sql
+
+# Create a bidirectional SQL migration
+migrations create -d migrations --undo "create users table"
+# → migrations/20250401120000_create_users_table.do.sql
+# → migrations/20250401120000_create_users_table.undo.sql
+
+# Create a Go migration file
+migrations create -d migrations -e go "seed initial data"
+# → migrations/20250401120000_seed_initial_data.go
+
+# Using up/down naming convention
+migrations create -d migrations --down "add email index"
+# → migrations/20250401120000_add_email_index.up.sql
+# → migrations/20250401120000_add_email_index.down.sql
+```
+
+## Migration ID Format
+
+The default format `20060102150405` generates IDs like `20250401120000` (YYYYMMDDHHmmss in Go's time format).
+
+The `unix` format uses Unix timestamps instead.

@@ -1,0 +1,62 @@
+# migrations
+
+A flexible, driver-agnostic migration library for Go.
+
+It separates **what** migrations are (Source), **where** state is tracked (Target), and **how** they run (Runner) — so you can migrate SQL databases, pgx connections, MongoDB, DynamoDB, or anything else with the same API.
+
+## Why migrations?
+
+Most migration tools are tightly coupled to SQL databases and force you into a specific workflow. This library takes a different approach:
+
+- **Source** loads available migrations from whatever media stores them — embedded SQL files, Go functions, or both combined in any order.
+- **Target** tracks which migrations have been applied. For SQL databases this is a `_migrations` table, for MongoDB it's a collection, for DynamoDB it's a table. You can implement `Target` for any storage backend.
+- **Runner** ties Source and Target together. A **Planner** decides which actions to take (migrate, reset, rewind, step), and the Runner executes them.
+
+This separation means the same migration engine works across different databases and migration formats without any code changes.
+
+## Features
+
+- **Multiple migration sources** — SQL files via `embed.FS`, Go functions, or both combined
+- **Bidirectional** — forward (Do) and backward (Undo) with optional undo support
+- **Database drivers** — `database/sql` (PostgreSQL, SQLite), native `pgx/v5`, MongoDB, DynamoDB
+- **Advisory locking** — prevents concurrent migration runs
+- **Dirty state detection** — flags incomplete migrations so you know when something failed mid-run
+- **Flexible planners** — migrate, reset, rewind, step forward/backward
+- **Progress reporting** — plug in Zap or implement your own reporter
+
+## Install
+
+```bash
+go get github.com/jamillosantos/migrations/v2
+```
+
+## Quick Example
+
+```go
+package main
+
+import (
+	"context"
+	"database/sql"
+	"embed"
+
+	_ "github.com/lib/pq"
+	"github.com/jamillosantos/migrations/v2"
+	migrationsql "github.com/jamillosantos/migrations/v2/sql"
+)
+
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
+
+func main() {
+	db, _ := sql.Open("postgres", "postgres://localhost:5432/mydb?sslmode=disable")
+
+	source, _ := migrationsql.SourceFromFS(func() migrationsql.DBExecer {
+		return db
+	}, migrationsFS, "migrations")
+
+	target, _ := migrationsql.NewTarget(db)
+
+	migrations.Migrate(context.Background(), source, target)
+}
+```

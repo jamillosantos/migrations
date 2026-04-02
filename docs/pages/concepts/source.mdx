@@ -1,0 +1,126 @@
+# Source
+
+A **Source** is the media that persists migrations. It loads the list of all available migrations so the runner can compare them against what has already been applied.
+
+## Interface
+
+```go
+type Source interface {
+    Add(ctx context.Context, migration Migration) error
+    Load(ctx context.Context) (Repository, error)
+}
+```
+
+- `Add` registers a migration with the source. Returns `ErrMigrationAlreadyExists` if a migration with the same ID is already registered.
+- `Load` returns a `Repository` containing all available migrations, sorted by ID (oldest first).
+
+## Built-in Sources
+
+### SQL Files (embed.FS)
+
+Load migrations from embedded SQL files using `SourceFromFS`:
+
+```go
+import migrationsql "github.com/jamillosantos/migrations/v2/sql"
+
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
+
+source, err := migrationsql.SourceFromFS(func() migrationsql.DBExecer {
+    return db
+}, migrationsFS, "migrations")
+```
+
+The `dbGetter` function is called each time a migration runs. This lets you control which connection or transaction is used for execution.
+
+A pgx-native equivalent is available in the `pgx` package:
+
+```go
+import migrationpgx "github.com/jamillosantos/migrations/v2/pgx"
+
+source, err := migrationpgx.SourceFromFS(func() migrationpgx.PgxDB {
+    return conn
+}, migrationsFS, "migrations")
+```
+
+You can also load from a directory on disk instead of an embedded filesystem:
+
+```go
+source, err := migrationsql.SourceFromDirectory(func() migrationsql.DBExecer {
+    return db
+}, "./migrations")
+```
+
+### Go Functions (fnc)
+
+For migrations that need to do more than run SQL — call APIs, transform data, coordinate between services:
+
+```go
+import "github.com/jamillosantos/migrations/v2/fnc"
+
+// Forward-only migration
+m := fnc.Migration(func(ctx context.Context) error {
+    // your migration logic
+    return nil
+})
+
+// Bidirectional migration
+m := fnc.Migration2(
+    func(ctx context.Context) error { /* do */ return nil },
+    func(ctx context.Context) error { /* undo */ return nil },
+)
+```
+
+The `fnc` package extracts the migration ID and description from the calling file's name. A file named `20250401120000_seed_initial_data.go` produces a migration with ID `20250401120000` and description `seed initial data`.
+
+**Options:**
+- `fnc.WithSkip(n)` — Skip N stack frames when resolving the caller filename. Useful when wrapping `fnc.Migration` in a helper function. Default: `1`.
+- `fnc.WithSource(source)` — Automatically register the migration with a source when it's created.
+
+### Memory Source
+
+A simple in-memory source, useful for code-based migrations:
+
+```go
+source := migrations.NewMemorySource()
+source.Add(ctx, myMigration)
+```
+
+## Combining Sources
+
+SQL file migrations and Go function migrations can coexist in the same source. Add function-based migrations to an SQL source:
+
+```go
+source, _ := migrationsql.SourceFromFS(dbGetter, migrationsFS, "migrations")
+
+for _, m := range codeMigrations {
+    source.Add(ctx, m)
+}
+```
+
+All migrations are sorted by ID (timestamp) regardless of their type, so they execute in chronological order.
+
+## Migration File Format
+
+SQL migration files follow this naming convention:
+
+```
+<timestamp>_<description>[.<direction>].sql
+```
+
+| Part | Description |
+|---|---|
+| `timestamp` | Migration ID, typically `YYYYMMDDHHmmss` format |
+| `description` | Human-readable name, underscores converted to spaces |
+| `direction` | Optional: `do`, `up`, `undo`, or `down` |
+
+Examples:
+```
+20250315143000_create_users.do.sql
+20250315143000_create_users.undo.sql
+20250315144500_add_email_index.sql        # forward-only (no direction suffix)
+```
+
+If no direction suffix is present, the file is treated as a forward-only (`.do`) migration.
+
+Undo files are optional. Migrations without an undo file cannot be reversed.

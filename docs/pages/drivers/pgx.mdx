@@ -1,0 +1,143 @@
+# PostgreSQL (pgx)
+
+The `pgx` package provides native [pgx/v5](https://github.com/jackc/pgx) Source and Target implementations. It uses pgx directly instead of going through `database/sql`, giving you access to PostgreSQL-specific features and better performance.
+
+## Install
+
+This package is included in the core module:
+
+```bash
+go get github.com/jamillosantos/migrations/v2
+```
+
+You also need pgx:
+
+```bash
+go get github.com/jackc/pgx/v5
+```
+
+## Source
+
+### From embedded files
+
+```go
+import migrationpgx "github.com/jamillosantos/migrations/v2/pgx"
+
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
+
+source, err := migrationpgx.SourceFromFS(func() migrationpgx.PgxDB {
+    return conn
+}, migrationsFS, "migrations")
+```
+
+The `PgxDB` interface:
+
+```go
+type PgxDB interface {
+    Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+    Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+    Begin(ctx context.Context) (pgx.Tx, error)
+}
+```
+
+Both `*pgx.Conn` and `pgx.Tx` satisfy this interface.
+
+### From a directory
+
+```go
+source, err := migrationpgx.SourceFromDirectory(func() migrationpgx.PgxDB {
+    return conn
+}, "./migrations")
+```
+
+## Target
+
+```go
+target, err := migrationpgx.NewTarget(ctx, conn)
+```
+
+Note that `NewTarget` takes a `context.Context` as the first argument (unlike the SQL package) because it queries the database name for advisory lock generation.
+
+### Options
+
+```go
+target, err := migrationpgx.NewTarget(ctx, conn,
+    migrationpgx.WithTableName("my_migrations"),       // default: "_migrations"
+    migrationpgx.WithDatabaseName("custom_db_name"),   // default: auto-detected
+)
+```
+
+| Option | Description | Default |
+|---|---|---|
+| `WithTableName(name)` | Name of the migrations tracking table | `"_migrations"` |
+| `WithDatabaseName(name)` | Database name for advisory lock ID generation | Auto-detected from connection |
+
+## Locking
+
+Uses PostgreSQL advisory locks (`pg_advisory_lock`), same as the `database/sql` driver. The lock ID is derived from the database name and table name.
+
+## Full Example
+
+```go
+package main
+
+import (
+	"context"
+	"embed"
+	"log"
+
+	"github.com/jackc/pgx/v5"
+	"go.uber.org/zap"
+
+	"github.com/jamillosantos/migrations/v2"
+	migrationpgx "github.com/jamillosantos/migrations/v2/pgx"
+	"github.com/jamillosantos/migrations/v2/reporters"
+)
+
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
+
+func main() {
+	logger, _ := zap.NewDevelopmentConfig().Build()
+	ctx := context.Background()
+
+	conn, err := pgx.Connect(ctx, "postgres://localhost:5432/mydb?sslmode=disable")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close(ctx)
+
+	source, err := migrationpgx.SourceFromFS(func() migrationpgx.PgxDB {
+		return conn
+	}, migrationsFS, "migrations")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	target, err := migrationpgx.NewTarget(ctx, conn)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	_, err = migrations.Migrate(ctx, source, target,
+		migrations.WithRunnerOptions(
+			migrations.WithReporter(reporters.NewZapReporter(logger)),
+		),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+## When to Use pgx vs database/sql
+
+| | database/sql | pgx |
+|---|---|---|
+| **Ecosystem** | Works with any sql.DB driver | PostgreSQL only |
+| **Performance** | Standard | Better — no sql.DB overhead |
+| **Features** | Standard SQL | Full PostgreSQL feature set |
+| **Connection type** | `*sql.DB` (pooled) | `*pgx.Conn` or `*pgxpool.Pool` |
+
+If your application already uses pgx, use the pgx driver. If you use `database/sql` or need to support multiple databases, use the sql driver.
