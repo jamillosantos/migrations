@@ -19,10 +19,14 @@ Pick the driver package for your database:
 
 ## Create Your First Migration
 
-Use the CLI to generate a migration file:
+Add the CLI as a tool dependency and generate a migration file:
 
 ```bash
-go run github.com/jamillosantos/migrations/v2/cli/migrations create -d migrations "create users table"
+go get -tool github.com/jamillosantos/migrations/v2/cli/migrations
+```
+
+```bash
+go tool migrations create -d migrations "create users table"
 ```
 
 This creates a file like `migrations/20250401120000_create_users_table.do.sql`. Open it and add your SQL:
@@ -39,7 +43,7 @@ CREATE TABLE users (
 To also generate an undo file, pass the `--undo` flag:
 
 ```bash
-go run github.com/jamillosantos/migrations/v2/cli/migrations create -d migrations --undo "create users table"
+go tool migrations create -d migrations --undo "create users table"
 ```
 
 This creates both `.do.sql` and `.undo.sql` files. Add the reverse operation to the undo file:

@@ -4,14 +4,16 @@ The migrations CLI helps you generate migration files with the correct naming co
 
 ## Install
 
+Add the CLI as a tool dependency in your `go.mod`:
+
 ```bash
-go install github.com/jamillosantos/migrations/v2/cli/migrations@latest
+go get -tool github.com/jamillosantos/migrations/v2/cli/migrations
 ```
 
-Or run it directly without installing:
+Then run it with `go tool`:
 
 ```bash
-go run github.com/jamillosantos/migrations/v2/cli/migrations <command>
+go tool migrations <command>
 ```
 
 ## Commands
