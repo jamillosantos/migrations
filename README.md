@@ -1,10 +1,28 @@
 # migrations
 
-Migrations is an abstraction for a migration system and it can migrate anything.
+[![Go Reference](https://pkg.go.dev/badge/github.com/jamillosantos/migrations/v2.svg)](https://pkg.go.dev/github.com/jamillosantos/migrations/v2)
 
-## How to use
+A flexible, driver-agnostic migration library for Go. It separates **what** migrations are (Source), **where** state is tracked (Target), and **how** they run (Runner) — so you can migrate SQL databases, pgx connections, or anything else with the same API.
 
-This example can be found in the `exapmles/postgres/main.go` file.
+## Features
+
+- **Multiple migration sources** — SQL files via `embed.FS`, Go functions, or both combined
+- **Bidirectional** — forward (`Do`) and backward (`Undo`) with optional undo support
+- **Database drivers** — `database/sql` (PostgreSQL, SQLite) and native `pgx/v5`
+- **Advisory locking** — PostgreSQL advisory locks prevent concurrent migration runs
+- **Dirty state detection** — flags incomplete migrations so you know when something failed mid-run
+- **Flexible planners** — migrate, reset, rewind, step forward/backward, do one, undo one
+- **Progress reporting** — plug in Zap or your own reporter
+
+## Install
+
+```bash
+go get github.com/jamillosantos/migrations/v2
+```
+
+## Quick Start
+
+### SQL files with `database/sql`
 
 ```go
 package main
@@ -15,130 +33,187 @@ import (
 	"embed"
 
 	_ "github.com/lib/pq"
-	"go.uber.org/zap"
 
 	"github.com/jamillosantos/migrations/v2"
-	"github.com/jamillosantos/migrations/v2/reporters"
 	migrationsql "github.com/jamillosantos/migrations/v2/sql"
 )
 
 //go:embed migrations/*.sql
-var migrationsFolder embed.FS
+var migrationsFS embed.FS
 
 func main() {
-	logger, err := zap.NewDevelopmentConfig().Build()
-	if err != nil {
-		panic(err)
-	}
-	defer func() {
-		_ = logger.Sync()
-    }()
-
-	db, err := sql.Open("postgres", "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable")
+	db, err := sql.Open("postgres", "postgres://localhost:5432/mydb?sslmode=disable")
 	if err != nil {
 		panic(err)
 	}
 
-	ctx := context.Background()
-
-	s, err := migrationsql.SourceFromFS(func() migrationsql.DBExecer {
+	source, err := migrationsql.SourceFromFS(func() migrationsql.DBExecer {
 		return db
-	}, migrationsFolder, "migrations")
+	}, migrationsFS, "migrations")
 	if err != nil {
 		panic(err)
 	}
 
-	t, err := migrationsql.NewTarget(db)
+	target, err := migrationsql.NewTarget(db)
 	if err != nil {
 		panic(err)
 	}
 
-	reporters.NewZapReporter(logger)
-
-	_, err = migrations.Migrate(ctx, s, t, migrations.WithRunnerOptions(migrations.WithReporter(reporters.NewZapReporter(logger))))
+	_, err = migrations.Migrate(context.Background(), source, target)
 	if err != nil {
 		panic(err)
 	}
 }
 ```
 
-## Generating new migration files
+### SQL files with pgx
+
+```go
+package main
+
+import (
+	"context"
+	"embed"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/jamillosantos/migrations/v2"
+	migrationpgx "github.com/jamillosantos/migrations/v2/pgx"
+)
+
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
+
+func main() {
+	ctx := context.Background()
+
+	conn, err := pgx.Connect(ctx, "postgres://localhost:5432/mydb?sslmode=disable")
+	if err != nil {
+		panic(err)
+	}
+	defer conn.Close(ctx)
+
+	source, err := migrationpgx.SourceFromFS(func() migrationpgx.PgxDB {
+		return conn
+	}, migrationsFS, "migrations")
+	if err != nil {
+		panic(err)
+	}
+
+	target, err := migrationpgx.NewTarget(ctx, conn)
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = migrations.Migrate(ctx, source, target)
+	if err != nil {
+		panic(err)
+	}
+}
+```
+
+### Go function migrations
+
+For migrations that need to do more than run SQL (call APIs, transform data, etc.), use the `fnc` package:
+
+```go
+package mymigrations
+
+import (
+	"context"
+
+	"github.com/jamillosantos/migrations/v2"
+	"github.com/jamillosantos/migrations/v2/fnc"
+)
+
+var CodeMigrations []migrations.Migration
+
+func register(do func(ctx context.Context) error) {
+	CodeMigrations = append(CodeMigrations, fnc.Migration(do, fnc.WithSkip(2)))
+}
+```
+
+Function-based and SQL-based migrations can be combined into a single source — they'll be sorted by timestamp and run in order.
+
+## Migration File Format
+
+SQL migration files follow this naming convention:
+
+```
+<timestamp>_<description>.<direction>.sql
+```
+
+Supported direction suffixes: `.do.sql`, `.up.sql`, `.undo.sql`, `.down.sql`
+
+Examples:
+```
+20250315143000_create_users.do.sql
+20250315143000_create_users.undo.sql
+20250315144500_add_email_index.do.sql
+```
+
+Undo files are optional. Migrations without an undo file are forward-only.
+
+## Generating Migration Files
 
 ```bash
 go run github.com/jamillosantos/migrations/v2/cli/migrations create -destination=migrations
 ```
 
-This will create an emtpy migration file in the `migrations` with the correct timestamp and a description:
+## Planners
+
+Control how migrations run by passing a planner to `Migrate`:
+
+| Planner | Behavior |
+|---|---|
+| `MigratePlanner` (default) | Run all pending migrations |
+| `ResetPlanner` | Undo everything, then migrate to latest |
+| `RewindPlanner` | Undo all applied migrations |
+| `StepPlanner(n)` | Step forward (`n > 0`) or backward (`n < 0`) by N |
+| `DoPlanner` | Run the next pending migration |
+| `UndoPlanner` | Undo the last applied migration |
+
+```go
+migrations.Migrate(ctx, source, target,
+	migrations.WithPlanner(migrations.ResetPlanner),
+)
+```
+
+## Reporters
+
+Track migration progress with a reporter:
+
+```go
+import "github.com/jamillosantos/migrations/v2/reporters"
+
+migrations.Migrate(ctx, source, target,
+	migrations.WithRunnerOptions(
+		migrations.WithReporter(reporters.NewZapReporter(logger)),
+	),
+)
+```
+
+Built-in reporters: `ZapReporter`, `NoopReporter`. Implement `RunnerReporter` for custom reporting.
+
+## Architecture
 
 ```
-migrations/20210101000000_my_migration.sql`
+Source (what to run)          Target (state tracking)
+  - SQL files (embed.FS)       - _migrations table
+  - Go functions (fnc)         - Any custom store
+  - Combined sources
+         \                    /
+          \                  /
+           Runner + Planner
+           (how to execute)
 ```
 
-## How it works
+**Source** loads available migrations from whatever media stores them — embedded SQL files, Go code, or both.
 
-The `migrations` package is a simple abstraction for a migration system. It is able to migrate anything that migrations
-would apply.
+**Target** tracks which migrations have been applied. For SQL databases, this is a `_migrations` table. You can implement `Target` for any storage backend.
 
-It has a simple design split into 3 main components:
+**Runner** ties Source and Target together. A **Planner** decides which actions to take (migrate, reset, rewind, step), and the Runner executes them.
 
-### Source
+## License
 
-A `Source` is the media that persists the migrations themselves. It is an entity that will load the migrations from SQL
-files, or from a S3 bucket (or anything else you need!).
-
-We have implemented support for the `fs.FS` interface, so you can use the `embed.FS` to load migrations from the binary.
-
-Also, `fnc` was created to allow you to load migrations from a function AND they can be used together. Please, check the
-`examples/fncmigrations` folder.
-
-### Target
-
-A `Target` is what the migrations persisted will be stored. If you are dealing with relational databases, like postgres,
-you would use the `_migrations` table by default. However, you could create a JSON file that would store the executed 
-migrations.
-
-### Runner
-
-The runner is the entity that will run the migrations. It will use the `Source` and `Target` to execute the migrations
-to retrive information about the available migrations (from the `Source`) and what migrations are already applied (
-from the `Target`).
-
-## Extending
-
-The `migrations` package is designed to be extended and you will, probably, only work with `Source`s and/or `Target`s.
-
-### 1. Source
-
-In some migration systems (like [golang-migrate/migrate](https://github.com/golang-migrate/migrate)) are stored as `.sql`
-files and are stored into a directory as `<timestamp>_<description>.(up|down).sql`. In other systems, the migration is
-a `func` that need to do some complex work and should connect many components before the actual database migration.
-
-So, in the first example, the `Source` is a directory containing a bunch of .sql files with specific names. In the second
-example, the `Source` are function that should be organized chronologically.
-
-Hence, `Source` is the media that persists the migrations themselves. In practice, it is just an `interface{}` with a
-bunch of methods that will list all available migrations ([check the code]()).
-
-**TODO**: Link the Source interface.
-
-### 2. Target
-
-A `Target` are what the migrations are transforming. If you are dealing with relational databases, like postgres, you would
-use a `TargetSQL` implementation (we provide one, check the our examples folder|**TODO**).
-
-In practice, a `Target` is just an `interface{}` with a bunch of methods that will list executed migrations, mark and
-unmark migrations as executed ([check the code]()).
-
-**TODO**: Link the Target interface.
-
-### 3. Executer
-
-An Executer integrations `Source` and `Target` and is responsible for step actions, like `Do` and `Undo`. Each call will
-step forward or backward one migration at a time.
-
-### 4. Runner
-
-Runners are, also, concrete. They capture the developer intentions and call the `Executer`.
-
-Let's say that you want to migrate your system. By that, you mean to run all pending migrations. So the runner will
-use the `Executer.Do` calling it multiple times to get all migrations executed.
+MIT
